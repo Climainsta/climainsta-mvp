@@ -60,6 +60,18 @@
     document.getElementById('noticeForm').addEventListener('submit',()=>{
       setTimeout(()=>{const n={id:noticeCode(),name:document.getElementById('name').value,phone:document.getElementById('phone').value,email:document.getElementById('email').value,town:document.getElementById('town').value,service:document.getElementById('service').value,details:document.getElementById('details').value,price:document.getElementById('day').value==='saturday'?'75 €':'69 €',status:'searching',statusLabel:'Comparando respuestas',createdAt:new Date().toISOString()};saveNotice(n);renderConnectedViews()},50);
     });
+    document.getElementById('noticeForm').addEventListener('submit',()=>{
+      setTimeout(async()=>{
+        const n=savedNotice(); if(!n)return;
+        try{
+          const response=await fetch('/api/notices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(n)});
+          const result=await response.json();
+          showToast(result.ok?'Aviso enviado al grupo de técnicos.':'Aviso guardado, pero no se pudo enviar al grupo.');
+        }catch(error){
+          showToast('Aviso guardado en la demo; revisa la conexión del servidor.');
+        }
+      },150);
+    });
     document.querySelectorAll('[data-view]').forEach(btn=>btn.addEventListener('click',()=>setTimeout(renderConnectedViews,0)));
     renderConnectedViews();
   </script>
