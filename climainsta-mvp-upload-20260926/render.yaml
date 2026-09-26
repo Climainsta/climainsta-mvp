@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: climainsta-mvp
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TELEGRAM_TECHNICIANS_CHAT_ID
+        value: "-1003729764470"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: MAIL_FROM
+        sync: false
