@@ -1,0 +1,16 @@
+{
+  "name": "climainsta-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MVP de gestión automatizada de avisos Climainsta",
+  "scripts": {
+    "start": "node work/server/server.js"
+  },
+  "dependencies": {
+    "googleapis": "^156.0.0",
+    "stripe": "^18.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
