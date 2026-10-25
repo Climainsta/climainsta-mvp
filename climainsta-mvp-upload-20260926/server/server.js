@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { google } = require('googleapis');
+const Stripe = require('stripe');
 
 const roots = [__dirname, path.resolve(__dirname, '..'), path.resolve(__dirname, '..', '..')];
 const candidates = roots.flatMap(root => [
@@ -48,8 +49,9 @@ async function sendCustomerAssignmentEmail(notice, winner) {
   const safeName = String(notice.name || '').replace(/[<>&]/g, '');
   const safeService = String(notice.service || '').replace(/[<>&]/g, '');
   const safeTown = String(notice.town || '').replace(/[<>&]/g, '');
-  const text = `Hola ${safeName},\n\nHemos encontrado un técnico para tu aviso de ${safeService} en ${safeTown}.\nTiempo estimado: ${winner.eta} minutos.\n\nEn breve recibirás el enlace de pago para confirmar la reserva.\n\nClimainsta`;
-  const html = `<!doctype html><html><body style="margin:0;background:#f3f8fa;font-family:Arial,sans-serif;color:#17324d"><div style="max-width:600px;margin:24px auto;background:#fff;border:1px solid #dce8ef;border-radius:16px;overflow:hidden"><div style="padding:22px;text-align:center;background:#fff"><img src="${logoUrl}" alt="Climainsta" style="width:280px;max-width:85%;height:auto"></div><div style="background:#087f8c;color:#fff;padding:24px 28px"><div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;opacity:.85">Aviso actualizado</div><h1 style="font-size:25px;margin:8px 0 0">¡Técnico encontrado!</h1></div><div style="padding:28px"><p>Hola ${safeName},</p><p>Hemos encontrado un técnico para tu aviso de <strong>${safeService}</strong> en <strong>${safeTown}</strong>.</p><div style="background:#eef8f7;border-radius:12px;padding:16px;margin:22px 0"><div style="font-size:12px;color:#688096">TIEMPO ESTIMADO DE LLEGADA</div><div style="font-size:26px;font-weight:700;color:#087f8c;margin-top:4px">${winner.eta} minutos</div></div><p style="color:#526d80">En breve recibirás el enlace de pago para confirmar la reserva. La tarifa cubre la gestión urgente, el desplazamiento y el diagnóstico inicial; cualquier reparación o pieza adicional se presupuestará aparte por el técnico.</p><div style="margin-top:26px;padding-top:18px;border-top:1px solid #dce8ef;font-size:12px;color:#688096">Aviso ${notice.id}<br>Climainsta · Tu técnico de clima, al instante.</div></div></div></body></html>`;
+  const paymentBlock = notice.paymentUrl ? `<p style="text-align:center;margin:28px 0"><a href="${notice.paymentUrl}" style="display:inline-block;background:#f39a3d;color:#fff;text-decoration:none;font-weight:700;padding:14px 24px;border-radius:9px">Pagar y confirmar reserva</a></p><p style="text-align:center;font-size:12px;color:#688096">Dispones de 7 minutos para confirmar el aviso.</p>` : '<p style="color:#a9681f">El enlace de pago se generará cuando Stripe esté configurado.</p>';
+  const text = `Hola ${safeName},\n\nHemos encontrado un técnico para tu aviso de ${safeService} en ${safeTown}.\nTiempo estimado: ${winner.eta} minutos.\n\n${notice.paymentUrl ? `Paga y confirma aquí: ${notice.paymentUrl}` : 'En breve recibirás el enlace de pago para confirmar la reserva.'}\n\nClimainsta`;
+  const html = `<!doctype html><html><body style="margin:0;background:#f3f8fa;font-family:Arial,sans-serif;color:#17324d"><div style="max-width:600px;margin:24px auto;background:#fff;border:1px solid #dce8ef;border-radius:16px;overflow:hidden"><div style="padding:22px;text-align:center;background:#fff"><img src="${logoUrl}" alt="Climainsta" style="width:280px;max-width:85%;height:auto"></div><div style="background:#087f8c;color:#fff;padding:24px 28px"><div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;opacity:.85">Aviso actualizado</div><h1 style="font-size:25px;margin:8px 0 0">¡Técnico encontrado!</h1></div><div style="padding:28px"><p>Hola ${safeName},</p><p>Hemos encontrado un técnico para tu aviso de <strong>${safeService}</strong> en <strong>${safeTown}</strong>.</p><div style="background:#eef8f7;border-radius:12px;padding:16px;margin:22px 0"><div style="font-size:12px;color:#688096">TIEMPO ESTIMADO DE LLEGADA</div><div style="font-size:26px;font-weight:700;color:#087f8c;margin-top:4px">${winner.eta} minutos</div></div>${paymentBlock}<p style="color:#526d80">La tarifa cubre la gestión urgente, el desplazamiento y el diagnóstico inicial; cualquier reparación o pieza adicional se presupuestará aparte por el técnico.</p><div style="margin-top:26px;padding-top:18px;border-top:1px solid #dce8ef;font-size:12px;color:#688096">Aviso ${notice.id}<br>Climainsta · Tu técnico de clima, al instante.</div></div></div></body></html>`;
   const raw = [
     `From: ${process.env.GMAIL_USER}`,
     `To: ${notice.email}`,
@@ -63,6 +65,25 @@ async function sendCustomerAssignmentEmail(notice, winner) {
   await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encodeMessage(raw) } });
   console.log('[gmail] Email enviado a', notice.email);
   return { sent: true };
+}
+
+async function createStripeCheckout(notice) {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    console.log('[stripe] STRIPE_SECRET_KEY no configurada');
+    return null;
+  }
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY.trim());
+  const amount = String(notice.price || '').includes('75') ? 7500 : 6900;
+  const baseUrl = process.env.PUBLIC_BASE_URL || 'https://climainsta-mvp.onrender.com';
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment', customer_email: notice.email,
+    line_items: [{ price_data: { currency: 'eur', product_data: { name: `Aviso Climainsta · ${notice.service}` }, unit_amount: amount }, quantity: 1 }],
+    metadata: { notice_id: notice.id },
+    success_url: `${baseUrl}/pago-confirmado?notice_id=${notice.id}`,
+    cancel_url: `${baseUrl}/pago-cancelado?notice_id=${notice.id}`
+  });
+  console.log('[stripe] Checkout creado para', notice.id);
+  return session.url;
 }
 
 async function sendTelegramNotice(notice) {
@@ -117,8 +138,12 @@ function closeTechnicianWindow(noticeId) {
   notice.eta = winner.eta;
   persistData();
   console.log('[selection] Técnico seleccionado:', noticeId, winner.eta, 'min');
-  console.log('[gmail] Intentando enviar email a:', notice.email || '(sin email)');
-  sendCustomerAssignmentEmail(notice, winner)
+  console.log('[gmail] Preparando email a:', notice.email || '(sin email)');
+  (async()=>{
+    notice.paymentUrl = await createStripeCheckout(notice);
+    persistData();
+    await sendCustomerAssignmentEmail(notice, winner);
+  })()
     .then(result => { notice.customerEmail = result; })
     .catch(error => { notice.customerEmail = { sent: false, reason: 'gmail_error' }; console.error('[gmail]', error.message); });
   telegramApi('sendMessage', {
@@ -141,6 +166,19 @@ function bodyOf(req) {
   });
 }
 
+function rawBodyOf(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function page(title, message) {
+  return `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="margin:0;background:#f3f8fa;font-family:Arial,sans-serif;color:#17324d"><main style="max-width:560px;margin:70px auto;background:#fff;border:1px solid #dce8ef;border-radius:18px;padding:36px;text-align:center"><h1 style="color:#087f8c">${title}</h1><p style="font-size:16px;line-height:1.6">${message}</p></main></body></html>`;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   if (req.method === 'GET' && url.pathname === '/') {
@@ -158,6 +196,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/health') {
     return reply(res, 200, { ok: true, service: 'climainsta-mvp', telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN) });
   }
+  if (req.method === 'GET' && url.pathname === '/pago-confirmado') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(page('Pago recibido', 'Hemos recibido tu pago. El técnico se pondrá en contacto contigo para coordinar el servicio.'));
+  }
+  if (req.method === 'GET' && url.pathname === '/pago-cancelado') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(page('Pago no completado', 'No se ha confirmado ningún cargo. Puedes volver al enlace de pago cuando estés preparado.'));
+  }
   if (req.method === 'GET' && url.pathname === '/api/notices') return reply(res, 200, { notices });
   if (req.method === 'POST' && url.pathname === '/api/notices') {
     try {
@@ -169,6 +215,32 @@ const server = http.createServer(async (req, res) => {
       try { telegram = await sendTelegramNotice(notice); } catch (error) { telegram = { sent: false, reason: 'telegram_error' }; console.error('[telegram]', error.message); }
       return reply(res, 201, { ok: true, notice, telegram });
     } catch { return reply(res, 400, { ok: false, error: 'JSON no válido' }); }
+  }
+  if (req.method === 'POST' && url.pathname === '/api/stripe/webhook') {
+    try {
+      const payload = await rawBodyOf(req);
+      const signature = req.headers['stripe-signature'];
+      const secret = process.env.STRIPE_WEBHOOK_SECRET;
+      if (!secret) return reply(res, 500, { ok: false, error: 'STRIPE_WEBHOOK_SECRET no configurado' });
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY.trim());
+      const event = stripe.webhooks.constructEvent(payload, signature, secret);
+      if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        const notice = notices.find(item => item.id === session.metadata?.notice_id);
+        if (notice) {
+          notice.status = 'paid';
+          notice.paidAt = new Date().toISOString();
+          persistData();
+          const destination = notice.technician?.id || process.env.TELEGRAM_TECHNICIANS_CHAT_ID;
+          await telegramApi('sendMessage', { chat_id: destination, text: `💳 PAGO CONFIRMADO\nAviso: ${notice.id}\nCliente: ${notice.name}\nTeléfono: ${notice.phone}\nZona: ${notice.town}\nDirección: ${notice.address}\nServicio: ${notice.service}\nDetalles: ${notice.details}` });
+          console.log('[stripe] Pago confirmado para', notice.id);
+        }
+      }
+      return reply(res, 200, { received: true });
+    } catch (error) {
+      console.error('[stripe webhook]', error.message);
+      return reply(res, 400, { ok: false, error: 'Webhook Stripe no válido' });
+    }
   }
   if (req.method === 'POST' && url.pathname === '/api/telegram/webhook') {
     try {
